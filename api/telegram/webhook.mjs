@@ -48,9 +48,43 @@ function telegramSafeError(body) {
   return body.description || JSON.stringify(body)
 }
 
+function parseApproverIds(raw) {
+  return String(raw || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+/** Empty whitelist denies all Approve/Reject presses until TELEGRAM_APPROVER_IDS is set. */
+function checkApproverAccess(query) {
+  const ids = parseApproverIds(process.env.TELEGRAM_APPROVER_IDS)
+  if (ids.length === 0) {
+    return {
+      ok: false,
+      text: 'Вайтлист пуст. Задайте TELEGRAM_APPROVER_IDS',
+    }
+  }
+  const userId =
+    query?.from?.id != null ? String(query.from.id) : ''
+  if (!userId || !ids.includes(userId)) {
+    return { ok: false, text: 'Нет доступа' }
+  }
+  return { ok: true }
+}
+
 async function handleCallbackQuery(token, query) {
   const data = String(query?.data || '').trim()
   if (data !== 'ord:ok' && data !== 'ord:no') return
+
+  const access = checkApproverAccess(query)
+  if (!access.ok) {
+    await tgApi(token, 'answerCallbackQuery', {
+      callback_query_id: query.id,
+      text: access.text,
+      show_alert: true,
+    })
+    return
+  }
 
   const message = query.message
   if (!message) {
