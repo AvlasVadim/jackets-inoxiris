@@ -47,6 +47,24 @@ function json(status, payload) {
   })
 }
 
+/** Place-name rule: letters, spaces, hyphen, apostrophe — not empty / digits-only. */
+function validateCity(value) {
+  const city = String(value || '').trim()
+  if (!city) {
+    return { ok: false, message: 'Укажите город' }
+  }
+  if (/^\d+$/.test(city)) {
+    return {
+      ok: false,
+      message: 'Город не может состоять только из цифр',
+    }
+  }
+  if (!/^[\p{L}\s\-']+$/u.test(city) || !/\p{L}/u.test(city)) {
+    return { ok: false, message: 'Укажите корректное название города' }
+  }
+  return { ok: true, message: '' }
+}
+
 function escapeHtml(value) {
   return String(value || '')
     .replaceAll('&', '&amp;')
@@ -282,6 +300,12 @@ export default {
           error: 'Required fields: name, phone, model, size',
         })
       }
+
+      const cityCheck = validateCity(body?.city)
+      if (!cityCheck.ok) {
+        return json(400, { ok: false, error: cityCheck.message })
+      }
+      body.city = String(body.city || '').trim()
 
       const text = buildDigest(body)
       const photoUrl = resolvePhotoUrl(
