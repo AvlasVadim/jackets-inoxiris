@@ -12,6 +12,9 @@ export type OrderBody = {
   size?: string
   color?: string
   comment?: string
+  /** Honeypot — must stay empty; filled by bots only. */
+  website?: string
+  company?: string
 }
 
 export type TelegramUser = {

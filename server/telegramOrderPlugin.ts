@@ -1,6 +1,12 @@
 import type { Plugin, Connect, PreviewServer, ViteDevServer } from 'vite'
 import { loadEnv } from 'vite'
 import {
+  checkOrderRateLimit,
+  clientIpFromHeaders,
+  isHoneypotFilled,
+  ORDER_RATE_LIMIT_MESSAGE,
+} from './orderAntiSpam'
+import {
   handleTelegramUpdate,
   processOrder,
   readTelegramEnv,
@@ -162,7 +168,25 @@ function attachTelegramRoutes(
     }
 
     try {
+      const ip = clientIpFromHeaders(
+        req.headers as { [key: string]: string | string[] | undefined },
+        req.socket?.remoteAddress || 'unknown',
+      )
+      const rate = checkOrderRateLimit(ip)
+      if (!rate.ok) {
+        res.setHeader('Retry-After', String(rate.retryAfterSec))
+        json(res, 429, { ok: false, error: ORDER_RATE_LIMIT_MESSAGE })
+        return
+      }
+
       const body = (await readJson(req)) as OrderBody
+      if (isHoneypotFilled(body as Record<string, unknown>)) {
+        console.warn('[order] honeypot filled — soft reject, no Telegram')
+        // Soft success so bots do not retry; nothing is sent to Telegram.
+        json(res, 200, { ok: true, mode: 'text', usedThread: false })
+        return
+      }
+
       const result = await processOrder({ env, body, root })
       if (!result.ok) {
         json(res, result.status, {

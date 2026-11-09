@@ -14,6 +14,7 @@ http://127.0.0.1:5173/
 ## Notes
 
 - Orders: form → `POST /api/order` (Vite middleware in `server/telegramOrderPlugin.ts`; on Vercel `api/order.mjs`) → Telegram `sendMessage` / `sendPhoto` with inline Approve/Reject.
+- **Anti-spam (no database):** honeypot field `website` (also rejects filled `company`) — filled → soft `200` and no Telegram. In-memory IP rate limit (`x-forwarded-for` / `x-real-ip`): max 5 requests / 10 minutes → `429` with a RU message. Helpers live in `server/orderAntiSpam.ts` (Vite); the same rules are mirrored in `api/order.mjs`. Serverless memory is **per instance** — good enough for Vercel Hobby; not a perfect cluster-wide limit across cold starts / multiple instances. No extra Vercel dashboard settings or env secrets required.
 - **Local:** callbacks via `getUpdates` polling. Requires `.env.local` (see `.env.example`).
 - **Prod (Vercel):** Telegram must `setWebhook` to `https://jackets-inoxiris.vercel.app/api/telegram/webhook` (`api/telegram/webhook.mjs`). Without that URL registered, Approve/Reject buttons spin forever. Register/verify:
   ```bash

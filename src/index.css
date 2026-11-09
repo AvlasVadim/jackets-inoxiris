@@ -1002,6 +1002,16 @@ textarea {
   gap: 1rem;
 }
 
+/* Honeypot — off-screen, not focusable via tab; keep in DOM for bot autofill. */
+.hp-field {
+  position: absolute;
+  left: -10000px;
+  top: auto;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+}
+
 .field {
   display: grid;
   gap: 0.4rem;
