@@ -1,6 +1,9 @@
 /**
  * Vercel serverless order endpoint (plain ESM, no TS / no shared imports).
  * Vite local middleware stays in server/telegramOrderPlugin.ts.
+ *
+ * Photos: never trust ephemeral VERCEL_URL for Telegram (SSO/Dashboard HTML).
+ * Use PUBLIC_SITE_URL / production alias, fetch the jpg here, multipart upload.
  */
 
 const ORDER_KB = {
@@ -11,6 +14,9 @@ const ORDER_KB = {
     ],
   ],
 }
+
+/** Canonical production site — Telegram must fetch from a public alias, not deploy URL. */
+const DEFAULT_PUBLIC_SITE = 'https://jackets-inoxiris.vercel.app'
 
 const PRODUCT_IDS = {
   'модель 1': '01',
@@ -96,18 +102,25 @@ function resolveProductId(modelName) {
   return null
 }
 
-function publicBaseUrl(request) {
+/**
+ * Prefer explicit PUBLIC_SITE_URL, then Vercel production alias.
+ * Do NOT use VERCEL_URL — that is the ephemeral deployment host and often
+ * returns Vercel SSO/Dashboard HTML to Telegram's image crawler.
+ */
+function publicBaseUrl() {
   const fromEnv = String(
     process.env.PUBLIC_SITE_URL || process.env.SITE_URL || '',
   ).trim()
   if (fromEnv) return fromEnv.replace(/\/$/, '')
-  const vercel = String(process.env.VERCEL_URL || '').trim()
-  if (vercel) return `https://${vercel.replace(/^https?:\/\//, '')}`
-  try {
-    return new URL(request.url).origin
-  } catch {
-    return undefined
+
+  const production = String(
+    process.env.VERCEL_PROJECT_PRODUCTION_URL || '',
+  ).trim()
+  if (production) {
+    return `https://${production.replace(/^https?:\/\//, '').replace(/\/$/, '')}`
   }
+
+  return DEFAULT_PUBLIC_SITE
 }
 
 function resolvePhotoUrl(baseUrl, model, color) {
@@ -154,25 +167,87 @@ async function tgApi(token, method, payload) {
   }
 }
 
-async function deliver({ token, chatId, threadId, text, photoUrl }) {
+/** Download product jpg from the public site; reject non-image (SSO HTML, etc.). */
+async function fetchProductPhoto(photoUrl) {
+  const res = await fetch(photoUrl, {
+    redirect: 'follow',
+    headers: { Accept: 'image/jpeg,image/*,*/*' },
+  })
+  if (!res.ok) {
+    throw new Error(`photo fetch HTTP ${res.status} for ${photoUrl}`)
+  }
+  const contentType = String(res.headers.get('content-type') || '').toLowerCase()
+  if (!contentType.startsWith('image/')) {
+    throw new Error(
+      `photo URL returned ${contentType || 'unknown'} (expected image) for ${photoUrl}`,
+    )
+  }
+  const bytes = new Uint8Array(await res.arrayBuffer())
+  if (bytes.byteLength < 1000) {
+    throw new Error(`photo too small (${bytes.byteLength}B) for ${photoUrl}`)
+  }
+  const name = photoUrl.split('/').pop() || 'product.jpg'
+  return { bytes, contentType: contentType.split(';')[0] || 'image/jpeg', name }
+}
+
+async function sendTelegramPhotoMultipart(opts) {
+  const form = new FormData()
+  form.append('chat_id', opts.chatId)
+  form.append('caption', opts.caption)
+  form.append('parse_mode', 'HTML')
+  form.append('reply_markup', JSON.stringify(ORDER_KB))
+  if (opts.threadId) form.append('message_thread_id', opts.threadId)
+  form.append(
+    'photo',
+    new Blob([opts.bytes], { type: opts.contentType }),
+    opts.name,
+  )
+
+  const res = await fetch(
+    `https://api.telegram.org/bot${opts.token}/sendPhoto`,
+    { method: 'POST', body: form },
+  )
+  const body = await res.json().catch(() => ({}))
+  return {
+    ok: res.ok && Boolean(body.ok),
+    status: res.status,
+    body,
+    mode: 'photo',
+    usedThread: Boolean(opts.threadId),
+  }
+}
+
+async function sendTelegramMessage(opts) {
   const payload = {
-    chat_id: chatId,
+    chat_id: opts.chatId,
+    text: opts.text,
     parse_mode: 'HTML',
+    disable_web_page_preview: true,
     reply_markup: ORDER_KB,
   }
-  if (threadId) payload.message_thread_id = Number(threadId)
-
-  if (photoUrl) {
-    payload.photo = photoUrl
-    payload.caption = text
-    const result = await tgApi(token, 'sendPhoto', payload)
-    return { ...result, mode: 'photo', usedThread: Boolean(threadId) }
+  if (opts.threadId) payload.message_thread_id = Number(opts.threadId)
+  const result = await tgApi(opts.token, 'sendMessage', payload)
+  return {
+    ...result,
+    mode: 'text',
+    usedThread: Boolean(opts.threadId),
   }
+}
 
-  payload.text = text
-  payload.disable_web_page_preview = true
-  const result = await tgApi(token, 'sendMessage', payload)
-  return { ...result, mode: 'text', usedThread: Boolean(threadId) }
+async function deliver({ token, chatId, threadId, text, photoUrl }) {
+  if (photoUrl) {
+    const photo = await fetchProductPhoto(photoUrl)
+    return sendTelegramPhotoMultipart({
+      token,
+      chatId,
+      threadId,
+      caption: text,
+      bytes: photo.bytes,
+      contentType: photo.contentType,
+      name: photo.name,
+    })
+  }
+  return sendTelegramMessage({ token, chatId, threadId, text })
 }
 
 export default {
@@ -210,72 +285,78 @@ export default {
 
       const text = buildDigest(body)
       const photoUrl = resolvePhotoUrl(
-        publicBaseUrl(request),
+        publicBaseUrl(),
         body.model,
         body.color || '',
       )
 
-      let result = await deliver({
-        token,
-        chatId,
-        threadId,
-        text,
-        photoUrl,
-      })
+      async function tryDeliver(withThread, url) {
+        return deliver({
+          token,
+          chatId,
+          threadId: withThread ? threadId : '',
+          text,
+          photoUrl: url,
+        })
+      }
 
-      if (!result.ok && photoUrl && result.mode === 'photo') {
+      let result
+      let warning
+      try {
+        result = await tryDeliver(Boolean(threadId), photoUrl)
+      } catch (photoErr) {
+        console.warn(
+          '[order] photo pipeline failed; falling back to text:',
+          photoErr instanceof Error ? photoErr.message : photoErr,
+        )
+        result = await tryDeliver(Boolean(threadId), null)
+        if (result.ok) {
+          warning = `Delivered as text (${photoErr instanceof Error ? photoErr.message : 'photo failed'})`
+        }
+      }
+
+      if (
+        result &&
+        !result.ok &&
+        photoUrl &&
+        result.mode === 'photo'
+      ) {
         console.warn(
           '[order] sendPhoto failed; falling back to text:',
           telegramSafeError(result.body),
         )
-        result = await deliver({
-          token,
-          chatId,
-          threadId,
-          text,
-          photoUrl: null,
-        })
+        result = await tryDeliver(Boolean(threadId), null)
         if (result.ok) {
-          return json(200, {
-            ok: true,
-            mode: 'text',
-            usedThread: result.usedThread,
-            warning: 'Delivered as text (photo URL rejected by Telegram)',
-          })
+          warning = 'Delivered as text (Telegram rejected photo upload)'
         }
       }
 
-      if (!result.ok && threadId && isThreadError(result.body)) {
+      if (result && !result.ok && threadId && isThreadError(result.body)) {
         console.warn(
           '[order] Telegram rejected message_thread_id; retrying without thread',
         )
-        result = await deliver({
-          token,
-          chatId,
-          threadId: '',
-          text,
-          photoUrl,
-        })
+        try {
+          result = await tryDeliver(false, photoUrl)
+        } catch {
+          result = await tryDeliver(false, null)
+        }
         if (result.ok) {
-          return json(200, {
-            ok: true,
-            mode: result.mode,
-            usedThread: false,
-            warning:
-              'Delivered without message_thread_id (thread id rejected)',
-          })
+          warning =
+            warning ||
+            'Delivered without message_thread_id (thread id rejected)'
         }
       }
 
-      if (!result.ok) {
+      if (!result?.ok) {
         console.error(
           '[order] Telegram send failed:',
-          telegramSafeError(result.body),
+          telegramSafeError(result?.body),
         )
         return json(502, {
           ok: false,
-          error: telegramSafeError(result.body),
-          telegramStatus: result.status,
+          error: telegramSafeError(result?.body),
+          telegramStatus: result?.status,
+          photoUrl: photoUrl || undefined,
         })
       }
 
@@ -283,6 +364,8 @@ export default {
         ok: true,
         mode: result.mode,
         usedThread: result.usedThread,
+        photoUrl: photoUrl || undefined,
+        ...(warning ? { warning } : {}),
       })
     } catch (err) {
       console.error(
