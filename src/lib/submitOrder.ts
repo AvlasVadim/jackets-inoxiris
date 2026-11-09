@@ -6,6 +6,8 @@ export type OrderPayload = {
   size: string
   color: string
   comment: string
+  /** Honeypot — always send empty string; bots that fill it are soft-rejected. */
+  website: string
 }
 
 export type SubmitOrderResult = {

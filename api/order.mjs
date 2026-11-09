@@ -1,10 +1,71 @@
 /**
  * Vercel serverless order endpoint (plain ESM, no TS / no shared imports).
- * Vite local middleware stays in server/telegramOrderPlugin.ts.
+ * Vite local middleware stays in server/telegramOrderPlugin.ts
+ * (+ shared anti-spam helpers in server/orderAntiSpam.ts — mirrored below).
  *
  * Photos: never trust ephemeral VERCEL_URL for Telegram (SSO/Dashboard HTML).
  * Use PUBLIC_SITE_URL / production alias, fetch the jpg here, multipart upload.
+ *
+ * Anti-spam (no database):
+ * - Honeypot fields `website` / `company` — if filled, soft 200, no Telegram.
+ * - In-memory IP rate limit (x-forwarded-for / x-real-ip): 5 req / 10 min.
+ *   Map is per serverless instance — good enough for Hobby; not cluster-wide.
  */
+
+const HONEYPOT_FIELDS = ['website', 'company']
+const ORDER_RATE_LIMIT_MAX = 5
+const ORDER_RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000
+const ORDER_RATE_LIMIT_MESSAGE =
+  'Слишком много заявок с вашего адреса. Подождите около 10 минут и попробуйте снова.'
+
+/** @type {Map<string, number[]>} */
+const hitsByIp = new Map()
+
+function isHoneypotFilled(body) {
+  if (!body || typeof body !== 'object') return false
+  for (const key of HONEYPOT_FIELDS) {
+    const value = body[key]
+    if (typeof value === 'string' && value.trim() !== '') return true
+    if (typeof value === 'number' && Number.isFinite(value)) return true
+    if (typeof value === 'boolean' && value) return true
+  }
+  return false
+}
+
+function clientIp(request) {
+  const xff = request.headers.get('x-forwarded-for')
+  if (xff && xff.trim()) return xff.split(',')[0].trim() || 'unknown'
+  const real = request.headers.get('x-real-ip')
+  if (real && real.trim()) return real.trim()
+  return 'unknown'
+}
+
+function checkOrderRateLimit(ip) {
+  const key = (ip || 'unknown').trim() || 'unknown'
+  const now = Date.now()
+  const cutoff = now - ORDER_RATE_LIMIT_WINDOW_MS
+  let hits = hitsByIp.get(key) || []
+  hits = hits.filter((t) => t > cutoff)
+  if (hits.length >= ORDER_RATE_LIMIT_MAX) {
+    hitsByIp.set(key, hits)
+    const oldest = hits[0] ?? now
+    const retryAfterSec = Math.max(
+      1,
+      Math.ceil((oldest + ORDER_RATE_LIMIT_WINDOW_MS - now) / 1000),
+    )
+    return { ok: false, retryAfterSec }
+  }
+  hits.push(now)
+  hitsByIp.set(key, hits)
+  if (hitsByIp.size > 2000) {
+    for (const [k, bucket] of hitsByIp) {
+      const kept = bucket.filter((t) => t > cutoff)
+      if (kept.length === 0) hitsByIp.delete(k)
+      else hitsByIp.set(k, kept)
+    }
+  }
+  return { ok: true }
+}
 
 const ORDER_KB = {
   inline_keyboard: [
@@ -40,10 +101,13 @@ const COLOR_LABEL_TO_SLUG = {
   Розовый: 'pink',
 }
 
-function json(status, payload) {
+function json(status, payload, extraHeaders) {
   return new Response(JSON.stringify(payload), {
     status,
-    headers: { 'Content-Type': 'application/json; charset=utf-8' },
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      ...(extraHeaders || {}),
+    },
   })
 }
 
@@ -275,11 +339,27 @@ export default {
     }
 
     try {
+      const ip = clientIp(request)
+      const rate = checkOrderRateLimit(ip)
+      if (!rate.ok) {
+        return json(
+          429,
+          { ok: false, error: ORDER_RATE_LIMIT_MESSAGE },
+          { 'Retry-After': String(rate.retryAfterSec) },
+        )
+      }
+
       let body
       try {
         body = await request.json()
       } catch {
         return json(400, { ok: false, error: 'Invalid JSON body' })
+      }
+
+      if (isHoneypotFilled(body)) {
+        console.warn('[order] honeypot filled — soft reject, no Telegram')
+        // Soft success so bots do not retry; nothing is sent to Telegram.
+        return json(200, { ok: true, mode: 'text', usedThread: false })
       }
 
       const { token, chatId, threadId } = readEnv()

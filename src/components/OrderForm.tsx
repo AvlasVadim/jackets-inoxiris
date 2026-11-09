@@ -51,6 +51,8 @@ export function OrderForm({
   const [size, setSize] = useState('')
   const [color, setColor] = useState('Любой')
   const [comment, setComment] = useState('')
+  /** Honeypot — leave empty; bots that autofill `website` are soft-rejected server-side. */
+  const [website, setWebsite] = useState('')
   const lastPayloadRef = useRef<OrderPayload | null>(null)
 
   useEffect(() => {
@@ -74,6 +76,7 @@ export function OrderForm({
     setSize('')
     setColor('Любой')
     setComment('')
+    setWebsite('')
     setPhoneErrorShown(false)
     setCityErrorShown(false)
     setPhoneSession((n) => n + 1)
@@ -135,6 +138,7 @@ export function OrderForm({
       size,
       color: color.trim(),
       comment,
+      website,
     })
   }
 
@@ -262,6 +266,21 @@ export function OrderForm({
               {comment.length}/2000
             </p>
           </div>
+
+          {/* Honeypot: hidden from users; bots that fill it are soft-rejected. */}
+          <div className="hp-field" aria-hidden="true">
+            <label htmlFor="website">Website</label>
+            <input
+              id="website"
+              name="website"
+              type="text"
+              tabIndex={-1}
+              autoComplete="off"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+            />
+          </div>
+
           <p className="form-note">{t.order.note}</p>
           <button
             className="btn btn-accent"
