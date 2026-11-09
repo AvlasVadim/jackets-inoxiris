@@ -216,12 +216,18 @@ function attachTelegramRoutes(
 
 function loadTelegramEnv(mode: string, root: string): TelegramEnv {
   const env = loadEnv(mode, root, '')
-  // Callback whitelist reads process.env; mirror .env.local for local polling.
+  // Callback handlers read process.env; mirror .env.local for local polling.
   if (
     process.env.TELEGRAM_APPROVER_IDS == null &&
     env.TELEGRAM_APPROVER_IDS != null
   ) {
     process.env.TELEGRAM_APPROVER_IDS = env.TELEGRAM_APPROVER_IDS
+  }
+  if (
+    process.env.TELEGRAM_SHIPPING_THREAD_ID == null &&
+    env.TELEGRAM_SHIPPING_THREAD_ID != null
+  ) {
+    process.env.TELEGRAM_SHIPPING_THREAD_ID = env.TELEGRAM_SHIPPING_THREAD_ID
   }
   return readTelegramEnv({
     TELEGRAM_BOT_TOKEN:
