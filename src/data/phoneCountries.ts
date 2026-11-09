@@ -48,47 +48,19 @@ export function matchPhoneCountry(digits: string): PhoneCountry | null {
   return dialsLongestFirst.find((c) => digits.startsWith(c.dial)) ?? null
 }
 
-function formatByNational(national: string): string {
-  const d = national.slice(0, 9)
-  const a = d.slice(0, 2)
-  const b = d.slice(2, 5)
-  const c = d.slice(5, 7)
-  const e = d.slice(7, 9)
-  let out = ''
-  if (a.length) {
-    out += `(${a}`
-    if (a.length === 2) out += ')'
-  }
-  if (b.length) out += `${a.length === 2 ? ' ' : ''}${b}`
-  if (c.length) out += `-${c}`
-  if (e.length) out += `-${e}`
-  return out
-}
-
-function formatRuNational(national: string): string {
-  const d = national.slice(0, 10)
-  const a = d.slice(0, 3)
-  const b = d.slice(3, 6)
-  const c = d.slice(6, 8)
-  const e = d.slice(8, 10)
-  let out = ''
-  if (a.length) {
-    out += `(${a}`
-    if (a.length === 3) out += ')'
-  }
-  if (b.length) out += `${a.length === 3 ? ' ' : ''}${b}`
-  if (c.length) out += `-${c}`
-  if (e.length) out += `-${e}`
-  return out
+/** National part of the visible mask; `X` = digit slot. */
+export function phoneNationalTemplate(country: PhoneCountry): string {
+  return country.id === 'BY' ? '(XX) XXX-XX-XX' : '(XXX) XXX-XX-XX'
 }
 
 /**
- * Display mask:
- * BY → +375 (00) 000-00-00
- * RU → +7 (000) 000-00-00
- * No / incomplete country → + or +digits as typed
+ * Full editor string with placeholders:
+ * BY → +375 (XX) XXX-XX-XX
+ * RU → +7 (XXX) XXX-XX-XX
+ * Typed digits replace X; punctuation always stays.
+ * Without a matched country → + / +digits as typed.
  */
-export function formatPhoneDisplay(digits: string): string {
+export function formatPhoneGhost(digits: string): string {
   if (!digits) return '+'
   const country = matchPhoneCountry(digits)
   if (!country) return `+${digits}`
@@ -96,12 +68,60 @@ export function formatPhoneDisplay(digits: string): string {
   const national = digits
     .slice(country.dial.length)
     .slice(0, country.nationalLength)
-  const formatted =
-    country.id === 'BY'
-      ? formatByNational(national)
-      : formatRuNational(national)
+  let ni = 0
+  let out = `+${country.dial} `
+  for (const ch of phoneNationalTemplate(country)) {
+    if (ch === 'X') {
+      out += ni < national.length ? national[ni++] : 'X'
+    } else {
+      out += ch
+    }
+  }
+  return out
+}
 
-  return formatted ? `+${country.dial} ${formatted}` : `+${country.dial}`
+/** Filled display only (no X) — Telegram / summary. */
+export function formatPhoneDisplay(digits: string): string {
+  const ghost = formatPhoneGhost(digits)
+  const x = ghost.indexOf('X')
+  if (x < 0) return ghost
+  return (
+    ghost
+      .slice(0, x)
+      .replace(/[\s-]+$/g, '')
+      .replace(/\($/g, '')
+      .trimEnd() || '+'
+  )
+}
+
+/** How many digits are strictly before `caret` in a ghost/display string. */
+export function digitIndexFromCaret(text: string, caret: number): number {
+  let count = 0
+  const lim = Math.max(0, Math.min(caret, text.length))
+  for (let i = 0; i < lim; i++) {
+    if (/\d/.test(text[i]!)) count++
+  }
+  return count
+}
+
+/** Caret position just after the N-th digit (N = digitIndex). 0 → after '+'. */
+export function caretFromDigitIndex(text: string, digitIndex: number): number {
+  if (digitIndex <= 0) {
+    const plus = text.indexOf('+')
+    return plus >= 0 ? plus + 1 : 0
+  }
+  let seen = 0
+  for (let i = 0; i < text.length; i++) {
+    if (/\d/.test(text[i]!)) {
+      seen++
+      if (seen === digitIndex) return i + 1
+    }
+  }
+  let last = text.indexOf('+') + 1
+  for (let i = 0; i < text.length; i++) {
+    if (/\d/.test(text[i]!)) last = i + 1
+  }
+  return last
 }
 
 /** Normalize any input to +digits (or "+") for parent state / Telegram. */

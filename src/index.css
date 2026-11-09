@@ -1395,11 +1395,54 @@ textarea {
   font-weight: 600;
 }
 
+.phone-input-slot {
+  position: relative;
+  display: grid;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.phone-input-slot > .phone-mask,
+.phone-input-slot > input {
+  grid-area: 1 / 1;
+  margin: 0;
+  padding: 0.85rem 0.95rem;
+  font: inherit;
+  font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, Menlo, monospace;
+  font-variant-ligatures: none;
+  letter-spacing: 0.01em;
+  white-space: pre;
+}
+
+.phone-mask {
+  z-index: 0;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  color: var(--ink);
+  user-select: none;
+}
+
+.phone-mask-x {
+  color: color-mix(in srgb, var(--muted) 82%, transparent);
+}
+
+.phone-mask-ch {
+  color: var(--ink);
+}
+
 .phone-shell input {
+  position: relative;
+  z-index: 1;
   border: 0;
   background: transparent;
   outline: none;
   box-shadow: none;
+}
+
+.phone-shell input.phone-input-ghosted {
+  color: transparent;
+  caret-color: var(--ink);
 }
 
 .phone-shell input:focus {
