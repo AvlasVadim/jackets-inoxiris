@@ -15,6 +15,8 @@ type Props = {
   attention?: boolean
   inputMode?: 'text' | 'numeric' | 'tel' | 'search'
   autoComplete?: string
+  /** Field-level validation message (same pattern as PhoneField). */
+  errorMessage?: string
   onChange: (value: string) => void
 }
 
@@ -31,9 +33,11 @@ export function Combobox({
   attention = false,
   inputMode,
   autoComplete = 'off',
+  errorMessage = '',
   onChange,
 }: Props) {
   const listId = useId()
+  const errorId = `${id}-error`
   const rootRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const [open, setOpen] = useState(false)
@@ -80,11 +84,11 @@ export function Combobox({
 
   return (
     <div
-      className={`field combobox${attention ? ' field--attention-host' : ''}${showAttention ? ' field--attention' : ''}`}
+      className={`field combobox${attention ? ' field--attention-host' : ''}${showAttention ? ' field--attention' : ''}${errorMessage ? ' is-invalid' : ''}`}
       ref={rootRef}
     >
       <label htmlFor={id}>{label}</label>
-      <div className="combobox-shell">
+      <div className={`combobox-shell${errorMessage ? ' is-invalid' : ''}`}>
         <input
           ref={inputRef}
           id={id}
@@ -98,6 +102,8 @@ export function Combobox({
           aria-expanded={wantList}
           aria-controls={listId}
           aria-autocomplete="list"
+          aria-invalid={Boolean(errorMessage)}
+          aria-describedby={errorMessage ? errorId : undefined}
           onChange={(e) => {
             const next = e.target.value
             setQuery(next)
@@ -178,6 +184,11 @@ export function Combobox({
           </ul>
         ) : null}
       </div>
+      {errorMessage ? (
+        <p id={errorId} className="field-error" role="alert">
+          {errorMessage}
+        </p>
+      ) : null}
     </div>
   )
 }
