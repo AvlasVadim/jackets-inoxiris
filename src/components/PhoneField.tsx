@@ -1,9 +1,11 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import {
-  defaultPhoneCountry,
   digitsOnly,
+  formatPhoneDisplay,
   matchPhoneCountry,
   phoneCountries,
+  SELECT_COUNTRY_LABEL,
+  toE164,
   validatePhone,
   type PhoneCountry,
 } from '../data/phoneCountries'
@@ -16,10 +18,6 @@ type Props = {
   required?: boolean
   showError?: boolean
   onChange: (e164: string) => void
-}
-
-function toDisplay(digits: string) {
-  return digits ? `+${digits}` : '+'
 }
 
 export function PhoneField({
@@ -36,11 +34,15 @@ export function PhoneField({
   const [touched, setTouched] = useState(false)
   const { mounted, visible } = useFlyout(open)
   const digits = digitsOnly(value)
-  const country = matchPhoneCountry(digits || defaultPhoneCountry.dial)
-  const display = toDisplay(digits || '')
+  const country = matchPhoneCountry(digits)
+  const display = formatPhoneDisplay(digits)
   const validation = validatePhone(value)
   const revealError = showError || touched
   const errorMessage = revealError && !validation.ok ? validation.message : ''
+  const flagCode = country?.id ?? 'NONE'
+  const flagLabel = country
+    ? `${country.id}, ${country.label}`
+    : SELECT_COUNTRY_LABEL
 
   useEffect(() => {
     function onDoc(event: MouseEvent) {
@@ -51,34 +53,38 @@ export function PhoneField({
   }, [])
 
   useEffect(() => {
-    // Don't mark dial-only prefix as invalid until the user interacts / submit fails
     inputRef.current?.setCustomValidity(
       revealError && !validation.ok ? validation.message : '',
     )
   }, [revealError, validation.ok, validation.message])
 
-  function setFromDigits(nextDigits: string) {
-    onChange(toDisplay(nextDigits))
+  function emitDigits(nextDigits: string) {
+    onChange(toE164(nextDigits))
   }
 
   function selectCountry(next: PhoneCountry) {
-    const local = digits.startsWith(country.dial)
-      ? digits.slice(country.dial.length)
-      : digits.replace(/^(375|7)/, '')
+    const local = country
+      ? digits.startsWith(country.dial)
+        ? digits.slice(country.dial.length)
+        : ''
+      : ''
     const clipped = local.slice(0, next.nationalLength)
-    setFromDigits(`${next.dial}${clipped}`)
+    emitDigits(`${next.dial}${clipped}`)
     setOpen(false)
     setTouched(true)
+    queueMicrotask(() => inputRef.current?.focus())
   }
 
   function onInput(raw: string) {
     let next = digitsOnly(raw)
-    const matched = matchPhoneCountry(next || defaultPhoneCountry.dial)
-    if (next.startsWith(matched.dial)) {
-      const national = next.slice(matched.dial.length).slice(0, matched.nationalLength)
+    const matched = matchPhoneCountry(next)
+    if (matched) {
+      const national = next
+        .slice(matched.dial.length)
+        .slice(0, matched.nationalLength)
       next = `${matched.dial}${national}`
     }
-    setFromDigits(next)
+    emitDigits(next)
   }
 
   return (
@@ -91,11 +97,13 @@ export function PhoneField({
           aria-haspopup="listbox"
           aria-expanded={open}
           aria-controls={listId}
-          aria-label={`${country.id}, ${country.label}`}
+          aria-label={flagLabel}
           onClick={() => setOpen((v) => !v)}
         >
-          <CountryFlag code={country.id} className="phone-flag-icon" />
-          <span className="phone-flag-code">{country.id}</span>
+          <CountryFlag code={flagCode} className="phone-flag-icon" />
+          <span className="phone-flag-code">
+            {country?.id ?? '—'}
+          </span>
           <span aria-hidden="true">▾</span>
         </button>
         <input
@@ -126,8 +134,23 @@ export function PhoneField({
             className={`phone-country-list menu-flyout${visible ? ' is-open' : ''}`}
             role="listbox"
           >
+            <li role="option" aria-selected={!country}>
+              <button
+                type="button"
+                className="phone-country-unknown"
+                onClick={() => {
+                  emitDigits('')
+                  setOpen(false)
+                  setTouched(true)
+                  queueMicrotask(() => inputRef.current?.focus())
+                }}
+              >
+                <CountryFlag code="NONE" className="phone-flag-icon" />
+                <span>{SELECT_COUNTRY_LABEL}</span>
+              </button>
+            </li>
             {phoneCountries.map((item) => (
-              <li key={item.id} role="option" aria-selected={item.id === country.id}>
+              <li key={item.id} role="option" aria-selected={item.id === country?.id}>
                 <button type="button" onClick={() => selectCountry(item)}>
                   <CountryFlag code={item.id} className="phone-flag-icon" />
                   <span>

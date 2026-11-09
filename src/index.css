@@ -1385,6 +1385,10 @@ textarea {
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
 }
 
+.phone-country-unknown {
+  color: var(--muted);
+}
+
 .phone-flag-code {
   font-size: 0.78rem;
   letter-spacing: 0.04em;

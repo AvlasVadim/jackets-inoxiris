@@ -4,6 +4,7 @@ import { colors, sizes } from '../data/colors'
 import {
   defaultPhoneCountry,
   digitsOnly,
+  formatPhoneDisplay,
   matchPhoneCountry,
   validatePhone,
 } from '../data/phoneCountries'
@@ -63,9 +64,8 @@ export function OrderForm({
   }, [prefillToken, prefillColor, prefillSize])
 
   function resetFields() {
-    const currentCountry = matchPhoneCountry(
-      digitsOnly(phone) || defaultPhoneCountry.dial,
-    )
+    const currentCountry =
+      matchPhoneCountry(digitsOnly(phone)) ?? defaultPhoneCountry
     setName('')
     setPhone(`+${currentCountry.dial}`)
     setCity('')
@@ -118,7 +118,7 @@ export function OrderForm({
 
     await sendPayload({
       name,
-      phone,
+      phone: formatPhoneDisplay(digitsOnly(phone)),
       city,
       model: selectedModel,
       size,
