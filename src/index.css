@@ -1123,6 +1123,11 @@ textarea {
   box-shadow: none;
 }
 
+.combobox-shell.is-invalid input {
+  border-color: var(--accent);
+  outline: 2px solid rgba(196, 18, 47, 0.22);
+}
+
 /* Product-card color: soft green until the list is opened */
 .field--attention .combobox-shell input {
   border-color: color-mix(in srgb, #1f9d55 55%, var(--line));

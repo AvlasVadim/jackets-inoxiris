@@ -107,8 +107,7 @@ export function OrderForm({
     const phoneCheck = validatePhone(phone)
     if (!phoneCheck.ok) {
       setPhoneErrorShown(true)
-      setStatus('error')
-      setErrorText(phoneCheck.message)
+      setErrorText('')
       document.getElementById('phone')?.focus()
       return
     }
@@ -116,8 +115,7 @@ export function OrderForm({
     const cityCheck = validateCity(city)
     if (!cityCheck.ok) {
       setCityErrorShown(true)
-      setStatus('error')
-      setErrorText(cityCheck.message)
+      setErrorText('')
       document.getElementById('city')?.focus()
       return
     }
@@ -145,6 +143,10 @@ export function OrderForm({
     if (!payload || status === 'sending') return
     await sendPayload(payload)
   }
+
+  const cityCheckLive = validateCity(city)
+  const cityFieldError =
+    cityErrorShown && !cityCheckLive.ok ? cityCheckLive.message : ''
 
   return (
     <section className="section" id="order">
@@ -190,10 +192,10 @@ export function OrderForm({
             label={t.order.city}
             value={city}
             options={cities}
-            required
             allowCustom
             autoComplete="address-level2"
             placeholder={t.order.cityPlaceholder}
+            errorMessage={cityFieldError}
             onChange={(next) => {
               setCity(next)
               if (cityErrorShown && validateCity(next).ok) {
