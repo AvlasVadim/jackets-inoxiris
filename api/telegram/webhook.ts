@@ -1,67 +1,54 @@
 import {
   handleTelegramUpdate,
+  jsonResponse,
   readTelegramEnv,
   type CallbackQuery,
-} from '../../server/telegramOrderCore'
-
-type VercelRequest = {
-  method?: string
-  body?: unknown
-  headers: Record<string, string | string[] | undefined>
-}
-
-type VercelResponse = {
-  status: (code: number) => VercelResponse
-  json: (body: unknown) => void
-  setHeader: (name: string, value: string) => void
-}
+} from '../../lib/vercelTelegramOrder'
 
 /**
- * Production callback path for Approve/Reject inline buttons.
- * Local `npm run dev` uses getUpdates polling instead.
- *
- * After deploy, set webhook once:
- *   https://api.telegram.org/bot<TOKEN>/setWebhook
- *     ?url=https://<your-domain>/api/telegram/webhook
- *     &secret_token=<TELEGRAM_WEBHOOK_SECRET>
- *     &allowed_updates=["callback_query"]
+ * Production callback path for Approve/Reject.
+ * After deploy:
+ *   setWebhook?url=https://<domain>/api/telegram/webhook
+ *   &secret_token=<TELEGRAM_WEBHOOK_SECRET>
+ *   &allowed_updates=["callback_query"]
  */
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse,
-) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST')
-    return res.status(405).json({ ok: false, error: 'Method not allowed' })
-  }
-
-  const { token, webhookSecret } = readTelegramEnv()
-  if (!token) {
-    return res.status(500).json({ ok: false, error: 'Bot token missing' })
-  }
-
-  if (webhookSecret) {
-    const header = req.headers['x-telegram-bot-api-secret-token']
-    const value = Array.isArray(header) ? header[0] : header
-    if (value !== webhookSecret) {
-      return res.status(401).json({ ok: false, error: 'Unauthorized' })
+export default {
+  async fetch(request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return jsonResponse(405, { ok: false, error: 'Method not allowed' })
     }
-  }
 
-  try {
-    const update = (
-      typeof req.body === 'string'
-        ? JSON.parse(req.body || '{}')
-        : req.body || {}
-    ) as { callback_query?: CallbackQuery }
+    try {
+      const { token, webhookSecret } = readTelegramEnv()
+      if (!token) {
+        return jsonResponse(500, { ok: false, error: 'Bot token missing' })
+      }
 
-    await handleTelegramUpdate(token, update)
-    return res.status(200).json({ ok: true })
-  } catch (err) {
-    console.error(
-      '[order] webhook error:',
-      err instanceof Error ? err.message : err,
-    )
-    return res.status(500).json({ ok: false, error: 'Webhook handler error' })
-  }
+      if (webhookSecret) {
+        const header = request.headers.get('x-telegram-bot-api-secret-token')
+        if (header !== webhookSecret) {
+          return jsonResponse(401, { ok: false, error: 'Unauthorized' })
+        }
+      }
+
+      let update: { callback_query?: CallbackQuery }
+      try {
+        update = (await request.json()) as { callback_query?: CallbackQuery }
+      } catch {
+        return jsonResponse(400, { ok: false, error: 'Invalid JSON body' })
+      }
+
+      await handleTelegramUpdate(token, update)
+      return jsonResponse(200, { ok: true })
+    } catch (err) {
+      console.error(
+        '[order] webhook error:',
+        err instanceof Error ? err.stack || err.message : err,
+      )
+      return jsonResponse(500, {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Webhook handler error',
+      })
+    }
+  },
 }

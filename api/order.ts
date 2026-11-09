@@ -1,86 +1,60 @@
 import {
+  jsonResponse,
   processOrder,
+  publicBaseUrlFromRequest,
   readTelegramEnv,
   type OrderBody,
-} from '../server/telegramOrderCore'
+} from '../lib/vercelTelegramOrder'
 
-type VercelRequest = {
-  method?: string
-  body?: unknown
-  headers: Record<string, string | string[] | undefined>
-}
-
-type VercelResponse = {
-  status: (code: number) => VercelResponse
-  json: (body: unknown) => void
-  setHeader: (name: string, value: string) => void
-}
-
-function publicBaseUrl(req: VercelRequest): string | undefined {
-  const fromEnv = (
-    process.env.PUBLIC_SITE_URL ||
-    process.env.SITE_URL ||
-    ''
-  ).trim()
-  if (fromEnv) return fromEnv.replace(/\/$/, '')
-
-  const vercel = (process.env.VERCEL_URL || '').trim()
-  if (vercel) return `https://${vercel.replace(/^https?:\/\//, '')}`
-
-  const protoHeader = req.headers['x-forwarded-proto']
-  const hostHeader = req.headers['x-forwarded-host'] || req.headers.host
-  const proto = Array.isArray(protoHeader)
-    ? protoHeader[0]
-    : protoHeader || 'https'
-  const host = Array.isArray(hostHeader) ? hostHeader[0] : hostHeader
-  if (host) return `${proto}://${host}`
-  return undefined
-}
-
-export default async function handler(
-  req: VercelRequest,
-  res: VercelResponse,
-) {
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST')
-    return res.status(405).json({ ok: false, error: 'Method not allowed' })
-  }
-
-  try {
-    const body = (
-      typeof req.body === 'string'
-        ? JSON.parse(req.body || '{}')
-        : req.body || {}
-    ) as OrderBody
-
-    const result = await processOrder({
-      env: readTelegramEnv(),
-      body,
-      root: process.cwd(),
-      publicBaseUrl: publicBaseUrl(req),
-    })
-
-    if (!result.ok) {
-      return res.status(result.status).json({
-        ok: false,
-        error: result.error,
-        ...(result.telegramStatus
-          ? { telegramStatus: result.telegramStatus }
-          : {}),
-      })
+/**
+ * Vercel Node function — Web Standard handler ("type": "module" safe).
+ * Local Vite middleware remains server/telegramOrderPlugin.ts.
+ */
+export default {
+  async fetch(request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return jsonResponse(405, { ok: false, error: 'Method not allowed' })
     }
 
-    return res.status(200).json({
-      ok: true,
-      mode: result.mode,
-      usedThread: result.usedThread,
-      ...(result.warning ? { warning: result.warning } : {}),
-    })
-  } catch (err) {
-    console.error(
-      '[order] handler error:',
-      err instanceof Error ? err.message : err,
-    )
-    return res.status(500).json({ ok: false, error: 'Internal order error' })
-  }
+    try {
+      let body: OrderBody
+      try {
+        body = (await request.json()) as OrderBody
+      } catch {
+        return jsonResponse(400, { ok: false, error: 'Invalid JSON body' })
+      }
+
+      const result = await processOrder({
+        env: readTelegramEnv(),
+        body,
+        publicBaseUrl: publicBaseUrlFromRequest(request),
+      })
+
+      if (!result.ok) {
+        return jsonResponse(result.status, {
+          ok: false,
+          error: result.error,
+          ...(result.telegramStatus
+            ? { telegramStatus: result.telegramStatus }
+            : {}),
+        })
+      }
+
+      return jsonResponse(200, {
+        ok: true,
+        mode: result.mode,
+        usedThread: result.usedThread,
+        ...(result.warning ? { warning: result.warning } : {}),
+      })
+    } catch (err) {
+      console.error(
+        '[order] handler error:',
+        err instanceof Error ? err.stack || err.message : err,
+      )
+      return jsonResponse(500, {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Internal order error',
+      })
+    }
+  },
 }
