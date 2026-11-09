@@ -15,9 +15,10 @@ export type SubmitOrderResult = {
 }
 
 /**
- * Client → local Vite middleware `/api/order` → Telegram sendMessage / sendPhoto.
+ * Client → `/api/order` → Telegram sendMessage / sendPhoto.
+ * Local: Vite middleware (telegramOrderPlugin). Prod: Vercel serverless `api/order`.
  * Matching color variants attach a product photo; «Любой» stays text-only.
- * Bot token stays server-side only (.env.local).
+ * Bot token stays server-side only (.env.local / Vercel Env).
  */
 export async function submitOrder(
   payload: OrderPayload,
