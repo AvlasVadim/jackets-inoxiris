@@ -327,17 +327,47 @@ function appendDecision(
   return `${original.trim()}\n\n────────\n<b>${status}</b>\n👤 ${escapeHtml(actor)}\n🕒 ${escapeHtml(stamp)}`
 }
 
+async function answerCallbackQuerySafe(
+  token: string,
+  queryId: string | undefined,
+  opts: { text?: string; show_alert?: boolean } = {},
+): Promise<void> {
+  if (!token || !queryId) return
+  try {
+    const payload: Record<string, unknown> = { callback_query_id: queryId }
+    if (opts.text) payload.text = opts.text
+    if (opts.show_alert) payload.show_alert = true
+    const result = await tgApi(token, 'answerCallbackQuery', payload)
+    if (!result.ok) {
+      console.error(
+        '[order] answerCallbackQuery failed:',
+        telegramSafeError(result.body),
+      )
+    }
+  } catch (err) {
+    console.error(
+      '[order] answerCallbackQuery threw:',
+      err instanceof Error ? err.message : err,
+    )
+  }
+}
+
 export async function handleCallbackQuery(
   token: string,
   query: CallbackQuery,
 ): Promise<void> {
   const data = (query.data || '').trim()
-  if (data !== 'ord:ok' && data !== 'ord:no') return
+  if (data !== 'ord:ok' && data !== 'ord:no') {
+    await answerCallbackQuerySafe(token, query.id, {
+      text: 'Неизвестная команда',
+      show_alert: true,
+    })
+    return
+  }
 
   const access = checkApproverAccess(query)
   if (!access.ok) {
-    await tgApi(token, 'answerCallbackQuery', {
-      callback_query_id: query.id,
+    await answerCallbackQuerySafe(token, query.id, {
       text: access.text,
       show_alert: true,
     })
@@ -346,8 +376,7 @@ export async function handleCallbackQuery(
 
   const message = query.message
   if (!message) {
-    await tgApi(token, 'answerCallbackQuery', {
-      callback_query_id: query.id,
+    await answerCallbackQuerySafe(token, query.id, {
       text: 'Сообщение недоступно',
       show_alert: true,
     })
@@ -356,13 +385,20 @@ export async function handleCallbackQuery(
 
   const isPhoto = Array.isArray(message.photo) && message.photo.length > 0
   const current = isPhoto ? message.caption || '' : message.text || ''
+  const already = messageAlreadyDecided(current)
+  const approved = data === 'ord:ok'
 
-  if (messageAlreadyDecided(current)) {
-    await tgApi(token, 'answerCallbackQuery', {
-      callback_query_id: query.id,
-      text: 'Заявка уже обработана',
-      show_alert: true,
-    })
+  // Answer BEFORE editing so a slow/failed edit cannot leave the spinner spinning.
+  await answerCallbackQuerySafe(token, query.id, {
+    text: already
+      ? 'Заявка уже обработана'
+      : approved
+        ? 'Одобрено'
+        : 'Отклонено',
+    show_alert: already,
+  })
+
+  if (already) {
     await tgApi(token, 'editMessageReplyMarkup', {
       chat_id: message.chat.id,
       message_id: message.message_id,
@@ -371,7 +407,6 @@ export async function handleCallbackQuery(
     return
   }
 
-  const approved = data === 'ord:ok'
   const actor = formatActor(query.from)
   const nextText = appendDecision(current, approved, actor)
 
@@ -395,18 +430,7 @@ export async function handleCallbackQuery(
       '[order] edit after callback failed:',
       telegramSafeError(edited.body),
     )
-    await tgApi(token, 'answerCallbackQuery', {
-      callback_query_id: query.id,
-      text: 'Не удалось обновить заявку',
-      show_alert: true,
-    })
-    return
   }
-
-  await tgApi(token, 'answerCallbackQuery', {
-    callback_query_id: query.id,
-    text: approved ? 'Одобрено' : 'Отклонено',
-  })
 }
 
 export async function handleTelegramUpdate(

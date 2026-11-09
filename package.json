@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "telegram:webhook": "node scripts/set-telegram-webhook.mjs",
+    "telegram:webhook:info": "node scripts/set-telegram-webhook.mjs --info"
   },
   "dependencies": {
     "react": "^19.1.0",

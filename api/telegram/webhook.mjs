@@ -1,4 +1,5 @@
 const STATUS_MARKERS = ['✅ Одобрено', '❌ Отклонено']
+const WEBHOOK_URL = 'https://jackets-inoxiris.vercel.app/api/telegram/webhook'
 
 function json(status, payload) {
   return new Response(JSON.stringify(payload), {
@@ -72,48 +73,48 @@ function checkApproverAccess(query) {
   return { ok: true }
 }
 
-async function handleCallbackQuery(token, query) {
-  const data = String(query?.data || '').trim()
-  if (data !== 'ord:ok' && data !== 'ord:no') return
-
-  const access = checkApproverAccess(query)
-  if (!access.ok) {
-    await tgApi(token, 'answerCallbackQuery', {
-      callback_query_id: query.id,
-      text: access.text,
-      show_alert: true,
-    })
-    return
+/** Always answer so Telegram stops the button spinner (even on errors). */
+async function answerCallbackQuery(token, queryId, opts = {}) {
+  if (!token || !queryId) return { ok: false, skipped: true }
+  try {
+    const payload = { callback_query_id: queryId }
+    if (opts.text) payload.text = opts.text
+    if (opts.show_alert) payload.show_alert = true
+    const result = await tgApi(token, 'answerCallbackQuery', payload)
+    if (!result.ok) {
+      console.error(
+        '[order] answerCallbackQuery failed:',
+        telegramSafeError(result.body),
+      )
+    }
+    return result
+  } catch (err) {
+    console.error(
+      '[order] answerCallbackQuery threw:',
+      err instanceof Error ? err.message : err,
+    )
+    return { ok: false }
   }
+}
 
+async function editDecisionMessage(token, query, approved) {
   const message = query.message
   if (!message) {
-    await tgApi(token, 'answerCallbackQuery', {
-      callback_query_id: query.id,
-      text: 'Сообщение недоступно',
-      show_alert: true,
-    })
-    return
+    return { ok: false, text: 'Сообщение недоступно', show_alert: true }
   }
 
   const isPhoto = Array.isArray(message.photo) && message.photo.length > 0
   const current = isPhoto ? message.caption || '' : message.text || ''
 
   if (STATUS_MARKERS.some((marker) => current.includes(marker))) {
-    await tgApi(token, 'answerCallbackQuery', {
-      callback_query_id: query.id,
-      text: 'Заявка уже обработана',
-      show_alert: true,
-    })
     await tgApi(token, 'editMessageReplyMarkup', {
       chat_id: message.chat.id,
       message_id: message.message_id,
       reply_markup: { inline_keyboard: [] },
     })
-    return
+    return { ok: true, text: 'Заявка уже обработана', show_alert: true }
   }
 
-  const approved = data === 'ord:ok'
   const actor = formatActor(query.from)
   const status = approved ? '✅ Одобрено' : '❌ Отклонено'
   const stamp = formatNow()
@@ -139,28 +140,99 @@ async function handleCallbackQuery(token, query) {
       '[order] edit after callback failed:',
       telegramSafeError(edited.body),
     )
-    await tgApi(token, 'answerCallbackQuery', {
-      callback_query_id: query.id,
-      text: 'Не удалось обновить заявку',
+    return { ok: false, text: 'Не удалось обновить заявку', show_alert: true }
+  }
+
+  return {
+    ok: true,
+    text: approved ? 'Одобрено' : 'Отклонено',
+  }
+}
+
+async function handleCallbackQuery(token, query) {
+  const queryId = query?.id
+  // Answer immediately with a neutral ack so the client spinner stops even if
+  // later edit/whitelist work is slow or throws. Telegram allows one answer;
+  // a second answerCallbackQuery is ignored — so we answer once here with the
+  // final user-facing text after fast checks, before slow edits when possible.
+  //
+  // Strategy: run fast auth/parse first (<1ms), answer with final toast, THEN edit.
+  // On unexpected throw, still attempt a fallback answer in the outer catch.
+
+  const data = String(query?.data || '').trim()
+  if (data !== 'ord:ok' && data !== 'ord:no') {
+    await answerCallbackQuery(token, queryId, {
+      text: 'Неизвестная команда',
       show_alert: true,
     })
     return
   }
 
-  await tgApi(token, 'answerCallbackQuery', {
-    callback_query_id: query.id,
-    text: approved ? 'Одобрено' : 'Отклонено',
+  const access = checkApproverAccess(query)
+  if (!access.ok) {
+    await answerCallbackQuery(token, queryId, {
+      text: access.text,
+      show_alert: true,
+    })
+    return
+  }
+
+  const approved = data === 'ord:ok'
+  const preview = query.message
+  if (!preview) {
+    await answerCallbackQuery(token, queryId, {
+      text: 'Сообщение недоступно',
+      show_alert: true,
+    })
+    return
+  }
+
+  const currentText =
+    Array.isArray(preview.photo) && preview.photo.length > 0
+      ? preview.caption || ''
+      : preview.text || ''
+  const already = STATUS_MARKERS.some((marker) => currentText.includes(marker))
+
+  // Answer BEFORE editing so a slow/failed edit cannot leave the spinner spinning.
+  await answerCallbackQuery(token, queryId, {
+    text: already
+      ? 'Заявка уже обработана'
+      : approved
+        ? 'Одобрено'
+        : 'Отклонено',
+    show_alert: already,
   })
+
+  try {
+    await editDecisionMessage(token, query, approved)
+  } catch (err) {
+    console.error(
+      '[order] edit after answered callback failed:',
+      err instanceof Error ? err.stack || err.message : err,
+    )
+  }
 }
 
 export default {
   async fetch(request) {
+    if (request.method === 'GET' || request.method === 'HEAD') {
+      return json(200, {
+        ok: true,
+        service: 'telegram-webhook',
+        webhookUrl: WEBHOOK_URL,
+        hint: 'Telegram must POST updates here. Run scripts/set-telegram-webhook.mjs or setWebhook.',
+      })
+    }
+
     if (request.method !== 'POST') {
       return json(405, { ok: false, error: 'Method not allowed' })
     }
 
+    let token = ''
+    let callbackQueryId = ''
+
     try {
-      const token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim()
+      token = String(process.env.TELEGRAM_BOT_TOKEN || '').trim()
       const webhookSecret = String(
         process.env.TELEGRAM_WEBHOOK_SECRET || '',
       ).trim()
@@ -183,6 +255,10 @@ export default {
         return json(400, { ok: false, error: 'Invalid JSON body' })
       }
 
+      callbackQueryId = update?.callback_query?.id
+        ? String(update.callback_query.id)
+        : ''
+
       if (update?.callback_query) {
         await handleCallbackQuery(token, update.callback_query)
       }
@@ -193,6 +269,13 @@ export default {
         '[order] webhook error:',
         err instanceof Error ? err.stack || err.message : err,
       )
+      // Last-resort: stop the Telegram spinner even when the handler blows up.
+      if (token && callbackQueryId) {
+        await answerCallbackQuery(token, callbackQueryId, {
+          text: 'Ошибка обработки',
+          show_alert: true,
+        })
+      }
       return json(500, {
         ok: false,
         error: err instanceof Error ? err.message : 'Webhook handler error',
