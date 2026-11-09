@@ -286,6 +286,32 @@ function formatActor(user?: TelegramUser): string {
   return name || `id:${user.id ?? '?'}`
 }
 
+export function parseApproverIds(raw: string | undefined): string[] {
+  return String(raw || '')
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+}
+
+/** Empty whitelist denies all Approve/Reject presses until TELEGRAM_APPROVER_IDS is set. */
+export function checkApproverAccess(
+  query: CallbackQuery,
+  source: Record<string, string | undefined> = process.env,
+): { ok: true } | { ok: false; text: string } {
+  const ids = parseApproverIds(source.TELEGRAM_APPROVER_IDS)
+  if (ids.length === 0) {
+    return {
+      ok: false,
+      text: 'Вайтлист пуст. Задайте TELEGRAM_APPROVER_IDS',
+    }
+  }
+  const userId = query.from?.id != null ? String(query.from.id) : ''
+  if (!userId || !ids.includes(userId)) {
+    return { ok: false, text: 'Нет доступа' }
+  }
+  return { ok: true }
+}
+
 function messageAlreadyDecided(text: string | undefined): boolean {
   if (!text) return false
   return STATUS_MARKERS.some((marker) => text.includes(marker))
@@ -307,6 +333,16 @@ export async function handleCallbackQuery(
 ): Promise<void> {
   const data = (query.data || '').trim()
   if (data !== 'ord:ok' && data !== 'ord:no') return
+
+  const access = checkApproverAccess(query)
+  if (!access.ok) {
+    await tgApi(token, 'answerCallbackQuery', {
+      callback_query_id: query.id,
+      text: access.text,
+      show_alert: true,
+    })
+    return
+  }
 
   const message = query.message
   if (!message) {
