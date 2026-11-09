@@ -79,7 +79,36 @@ const ORDER_KB = {
   ],
 }
 
+/** Inline statuses for topic «Отправка товара» (TELEGRAM_SHIPPING_THREAD_ID). */
+const SHIPPING_KB = {
+  inline_keyboard: [
+    [
+      { text: 'В сборке', callback_data: 'ship:pack' },
+      { text: 'Отправлено', callback_data: 'ship:sent' },
+      { text: 'Доставлено', callback_data: 'ship:done' },
+    ],
+    [
+      { text: 'Проблема', callback_data: 'ship:issue' },
+      { text: 'Отмена', callback_data: 'ship:cancel' },
+    ],
+  ],
+}
+
 const STATUS_MARKERS = ['✅ Одобрено', '❌ Отклонено'] as const
+
+const SHIPPING_STATUSES: Record<
+  string,
+  { label: string; marker: string }
+> = {
+  'ship:pack': { label: 'В сборке', marker: '📦 В сборке' },
+  'ship:sent': { label: 'Отправлено', marker: '🚚 Отправлено' },
+  'ship:done': { label: 'Доставлено', marker: '📬 Доставлено' },
+  'ship:issue': { label: 'Проблема', marker: '⚠️ Проблема' },
+  'ship:cancel': { label: 'Отмена', marker: '🚫 Отмена' },
+}
+
+const SHIPPING_STATUS_FOOTER_RE =
+  /\n\n────────\n(?:<b>)?(?:📦 В сборке|🚚 Отправлено|📬 Доставлено|⚠️ Проблема|🚫 Отмена)(?:<\/b>)?(?:\n[\s\S]*)?$/
 
 export function escapeHtml(value: string): string {
   return value
@@ -297,7 +326,10 @@ export function parseApproverIds(raw: string | undefined): string[] {
     .filter(Boolean)
 }
 
-/** Empty whitelist denies all Approve/Reject presses until TELEGRAM_APPROVER_IDS is set. */
+/**
+ * Empty whitelist denies Approve/Reject and shipping-status presses until
+ * TELEGRAM_APPROVER_IDS is set.
+ */
 export function checkApproverAccess(
   query: CallbackQuery,
   source: Record<string, string | undefined> = process.env,
@@ -331,6 +363,17 @@ function appendDecision(
   return `${original.trim()}\n\n────────\n<b>${status}</b>\n👤 ${escapeHtml(actor)}\n🕒 ${escapeHtml(stamp)}`
 }
 
+function applyShippingStatus(original: string, marker: string): string {
+  const base = original.replace(SHIPPING_STATUS_FOOTER_RE, '').trim()
+  return `${base}\n\n────────\n<b>${marker}</b>`
+}
+
+function readShippingThreadId(
+  source: Record<string, string | undefined> = process.env,
+): string {
+  return (source.TELEGRAM_SHIPPING_THREAD_ID || '').trim()
+}
+
 async function answerCallbackQuerySafe(
   token: string,
   queryId: string | undefined,
@@ -356,11 +399,153 @@ async function answerCallbackQuerySafe(
   }
 }
 
+type PhotoSize = { file_id: string }
+
+function largestPhotoFileId(photo: unknown[] | undefined): string | null {
+  if (!Array.isArray(photo) || photo.length === 0) return null
+  const last = photo[photo.length - 1] as PhotoSize | undefined
+  return last?.file_id || null
+}
+
+/**
+ * Post a fresh product/client card into «Отправка товара» (no approver stamp).
+ * Uses the same photo file_id when the approved message had a photo.
+ */
+export async function postShippingCard(
+  token: string,
+  message: TelegramMessage,
+  baseText: string,
+  source: Record<string, string | undefined> = process.env,
+): Promise<void> {
+  const shippingThreadId = readShippingThreadId(source)
+  if (!shippingThreadId) {
+    console.warn(
+      '[order] TELEGRAM_SHIPPING_THREAD_ID missing — skip shipping card',
+    )
+    return
+  }
+
+  const chatId = message.chat.id
+  const fileId = largestPhotoFileId(message.photo)
+  const caption = baseText.trim()
+
+  async function deliver(withThread: boolean): Promise<{
+    ok: boolean
+    body: unknown
+  }> {
+    const thread = withThread ? Number(shippingThreadId) : undefined
+    if (fileId) {
+      const payload: Record<string, unknown> = {
+        chat_id: chatId,
+        photo: fileId,
+        caption,
+        parse_mode: 'HTML',
+        reply_markup: SHIPPING_KB,
+      }
+      if (thread != null) payload.message_thread_id = thread
+      return tgApi(token, 'sendPhoto', payload)
+    }
+    const payload: Record<string, unknown> = {
+      chat_id: chatId,
+      text: caption,
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+      reply_markup: SHIPPING_KB,
+    }
+    if (thread != null) payload.message_thread_id = thread
+    return tgApi(token, 'sendMessage', payload)
+  }
+
+  let result = await deliver(true)
+  if (!result.ok && isThreadError(result.body)) {
+    console.warn(
+      '[order] shipping thread rejected; retrying without message_thread_id',
+    )
+    result = await deliver(false)
+  }
+  if (!result.ok) {
+    console.error(
+      '[order] shipping card send failed:',
+      telegramSafeError(result.body),
+    )
+  }
+}
+
+async function handleShippingStatusCallback(
+  token: string,
+  query: CallbackQuery,
+  data: string,
+): Promise<void> {
+  const status = SHIPPING_STATUSES[data]
+  if (!status) {
+    await answerCallbackQuerySafe(token, query.id, {
+      text: 'Неизвестная команда',
+      show_alert: true,
+    })
+    return
+  }
+
+  const access = checkApproverAccess(query)
+  if (!access.ok) {
+    await answerCallbackQuerySafe(token, query.id, {
+      text: access.text,
+      show_alert: true,
+    })
+    return
+  }
+
+  const message = query.message
+  if (!message) {
+    await answerCallbackQuerySafe(token, query.id, {
+      text: 'Сообщение недоступно',
+      show_alert: true,
+    })
+    return
+  }
+
+  // Answer BEFORE editing so a slow/failed edit cannot leave the spinner spinning.
+  await answerCallbackQuerySafe(token, query.id, {
+    text: status.label,
+  })
+
+  const isPhoto = Array.isArray(message.photo) && message.photo.length > 0
+  const current = isPhoto ? message.caption || '' : message.text || ''
+  const nextText = applyShippingStatus(current, status.marker)
+
+  const editMethod = isPhoto ? 'editMessageCaption' : 'editMessageText'
+  const editPayload: Record<string, unknown> = {
+    chat_id: message.chat.id,
+    message_id: message.message_id,
+    parse_mode: 'HTML',
+    reply_markup: SHIPPING_KB,
+  }
+  if (isPhoto) {
+    editPayload.caption = nextText
+  } else {
+    editPayload.text = nextText
+    editPayload.disable_web_page_preview = true
+  }
+
+  const edited = await tgApi(token, editMethod, editPayload)
+  if (!edited.ok) {
+    console.error(
+      '[order] shipping status edit failed:',
+      telegramSafeError(edited.body),
+    )
+  }
+}
+
 export async function handleCallbackQuery(
   token: string,
   query: CallbackQuery,
 ): Promise<void> {
   const data = (query.data || '').trim()
+
+  if (data in SHIPPING_STATUSES) {
+    await handleShippingStatusCallback(token, query, data)
+    return
+  }
+
   if (data !== 'ord:ok' && data !== 'ord:no') {
     await answerCallbackQuerySafe(token, query.id, {
       text: 'Неизвестная команда',
@@ -434,6 +619,19 @@ export async function handleCallbackQuery(
       '[order] edit after callback failed:',
       telegramSafeError(edited.body),
     )
+    return
+  }
+
+  // Reject path unchanged: only approved orders get a shipping-topic card.
+  if (approved) {
+    try {
+      await postShippingCard(token, message, current)
+    } catch (err) {
+      console.error(
+        '[order] shipping card after approve failed:',
+        err instanceof Error ? err.stack || err.message : err,
+      )
+    }
   }
 }
 
