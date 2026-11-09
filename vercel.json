@@ -3,10 +3,10 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
-    "api/order.ts": {
+    "api/order.mjs": {
       "maxDuration": 15
     },
-    "api/telegram/webhook.ts": {
+    "api/telegram/webhook.mjs": {
       "maxDuration": 10
     }
   }
