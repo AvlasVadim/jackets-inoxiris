@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { products } from '../src/data/products'
 import { colorLabelToSlug } from '../src/data/productColors'
+import { validateCity } from '../src/lib/validateCity'
 
 export type OrderBody = {
   name?: string
@@ -482,7 +483,16 @@ export async function processOrder(opts: {
     }
   }
 
-  const text = buildDigest(body)
+  const cityCheck = validateCity(String(body.city ?? ''))
+  if (!cityCheck.ok) {
+    return {
+      ok: false,
+      status: 400,
+      error: cityCheck.message,
+    }
+  }
+
+  const text = buildDigest({ ...body, city: String(body.city ?? '').trim() })
   const photoPath = root
     ? resolveVariantPhotoPath(root, body.model, body.color || '')
     : null

@@ -11,6 +11,7 @@ import {
 import { products } from '../data/products'
 import type { Messages } from '../i18n/messages'
 import { submitOrder, type OrderPayload } from '../lib/submitOrder'
+import { validateCity } from '../lib/validateCity'
 import { Combobox } from './Combobox'
 import { PhoneField } from './PhoneField'
 import { Toast } from './Toast'
@@ -41,6 +42,7 @@ export function OrderForm({
   )
   const [errorText, setErrorText] = useState('')
   const [phoneErrorShown, setPhoneErrorShown] = useState(false)
+  const [cityErrorShown, setCityErrorShown] = useState(false)
   const [phoneSession, setPhoneSession] = useState(0)
   const [toast, setToast] = useState<ToastState>({ open: false })
   const [name, setName] = useState('')
@@ -73,6 +75,7 @@ export function OrderForm({
     setColor('Любой')
     setComment('')
     setPhoneErrorShown(false)
+    setCityErrorShown(false)
     setPhoneSession((n) => n + 1)
     onModelChange('')
   }
@@ -81,6 +84,7 @@ export function OrderForm({
     setStatus('sending')
     setErrorText('')
     setPhoneErrorShown(false)
+    setCityErrorShown(false)
     lastPayloadRef.current = payload
 
     const result = await submitOrder(payload)
@@ -109,6 +113,15 @@ export function OrderForm({
       return
     }
 
+    const cityCheck = validateCity(city)
+    if (!cityCheck.ok) {
+      setCityErrorShown(true)
+      setStatus('error')
+      setErrorText(cityCheck.message)
+      document.getElementById('city')?.focus()
+      return
+    }
+
     if (!color.trim()) {
       setStatus('error')
       setErrorText('Укажите цвет или выберите «Любой»')
@@ -119,7 +132,7 @@ export function OrderForm({
     await sendPayload({
       name,
       phone: formatPhoneDisplay(digitsOnly(phone)),
-      city,
+      city: city.trim(),
       model: selectedModel,
       size,
       color: color.trim(),
@@ -181,7 +194,16 @@ export function OrderForm({
             allowCustom
             autoComplete="address-level2"
             placeholder={t.order.cityPlaceholder}
-            onChange={setCity}
+            onChange={(next) => {
+              setCity(next)
+              if (cityErrorShown && validateCity(next).ok) {
+                setCityErrorShown(false)
+                if (status === 'error') {
+                  setStatus('idle')
+                  setErrorText('')
+                }
+              }
+            }}
           />
 
           <Combobox
