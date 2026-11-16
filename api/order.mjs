@@ -144,6 +144,12 @@ function formatNow() {
   })
 }
 
+/** Plain +digits for Telegram so the number is tappable to call. */
+function formatPhoneForTelegram(phone) {
+  const digits = String(phone || '').replace(/\D/g, '')
+  return digits ? `+${digits}` : ''
+}
+
 function buildDigest(body) {
   const row = (emoji, label, value) =>
     `${emoji} <b>${label}:</b> ${escapeHtml(value || '—')}`
@@ -159,7 +165,7 @@ function buildDigest(body) {
     '👤 <b>Клиент</b>',
     '────────',
     row('✍️', 'Имя', body.name),
-    row('📞', 'Телефон', body.phone),
+    row('📞', 'Телефон', formatPhoneForTelegram(body.phone)),
     row('🏙', 'Город', body.city),
     row('💬', 'Комментарий', body.comment),
     row('🕒', 'Время', formatNow()),
