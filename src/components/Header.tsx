@@ -1,6 +1,7 @@
 import { useEffect, useId, useState } from 'react'
 import type { Messages } from '../i18n/messages'
 import type { Theme } from '../hooks/useTheme'
+import { lockBodyScroll } from '../lib/scrollLock'
 
 type Props = {
   t: Messages
@@ -27,7 +28,12 @@ export function Header({ t, theme, onToggleTheme }: Props) {
 
   useEffect(() => {
     document.body.classList.toggle('menu-open', menuOpen)
-    return () => document.body.classList.remove('menu-open')
+    if (!menuOpen) return undefined
+    const unlock = lockBodyScroll()
+    return () => {
+      document.body.classList.remove('menu-open')
+      unlock()
+    }
   }, [menuOpen])
 
   useEffect(() => {

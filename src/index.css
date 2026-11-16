@@ -43,6 +43,7 @@ html[data-theme='dark'] {
 }
 
 html {
+  --scrollbar-compensation: 0px;
   scroll-behavior: smooth;
 }
 
@@ -58,10 +59,6 @@ body {
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   transition: background 0.7s ease;
-}
-
-body.menu-open {
-  overflow: hidden;
 }
 
 /* Soft page fade when toggling light ↔ dark */
@@ -128,7 +125,8 @@ textarea {
   position: fixed;
   top: 0;
   left: 0;
-  right: 0;
+  /* Inset from the right when scroll-lock pads body (keeps icons aligned with content). */
+  right: var(--scrollbar-compensation, 0px);
   z-index: 40;
   display: flex;
   align-items: center;
@@ -779,6 +777,9 @@ textarea {
   border-radius: 0.3rem;
   background: var(--paper-soft);
   cursor: none;
+  /* Fixed photo slot — same size for every product / color aspect ratio. */
+  width: 100%;
+  height: min(58vh, 520px);
   min-height: 280px;
 }
 
@@ -787,6 +788,7 @@ textarea {
   left: 50%;
   bottom: 0.85rem;
   transform: translateX(-50%);
+  z-index: 2;
   padding: 0.35rem 0.65rem;
   border-radius: 999px;
   background: color-mix(in srgb, var(--paper) 82%, transparent);
@@ -796,13 +798,26 @@ textarea {
 }
 
 .lightbox-image {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
-  max-height: min(68vh, 620px);
+  /* Contain inside fixed frame — full product visible, no zoomed crop. */
   object-fit: contain;
+  object-position: center;
   display: block;
   pointer-events: none;
   user-select: none;
+}
+
+.lightbox-image.is-pending {
+  opacity: 0;
+  z-index: 0;
+}
+
+.lightbox-image.is-shown {
+  opacity: 1;
+  z-index: 1;
 }
 
 .lightbox-lens {
@@ -929,6 +944,8 @@ textarea {
 
   .lightbox-stage {
     cursor: crosshair;
+    height: min(48vh, 420px);
+    min-height: 240px;
   }
 }
 
@@ -1081,6 +1098,12 @@ textarea {
   outline: 2px solid rgba(196, 18, 47, 0.35);
   border-color: var(--accent);
   box-shadow: none;
+}
+
+.field.is-invalid input,
+.field input.is-invalid {
+  border-color: var(--accent);
+  outline: 2px solid rgba(196, 18, 47, 0.22);
 }
 
 .field select {
@@ -1554,6 +1577,15 @@ textarea {
 .social-link:hover {
   color: var(--accent);
   transform: translateY(-1px);
+}
+
+.social-link--static {
+  cursor: default;
+}
+
+.social-link--static:hover {
+  color: var(--ink);
+  transform: none;
 }
 
 @keyframes hero-drift {

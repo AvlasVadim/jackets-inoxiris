@@ -1,4 +1,14 @@
-const socials = [
+import type { ReactNode } from 'react'
+
+type Social = {
+  id: string
+  label: string
+  /** Null = icon only (no destination for now). */
+  href: string | null
+  icon: ReactNode
+}
+
+const socials: Social[] = [
   {
     id: 'instagram',
     label: 'Instagram',
@@ -15,7 +25,8 @@ const socials = [
   {
     id: 'telegram',
     label: 'Telegram',
-    href: 'https://t.me/inoxiris_by',
+    // Group link removed for now — icon stays visual-only.
+    href: null,
     icon: (
       <svg viewBox="0 0 24 24" aria-hidden="true" width="20" height="20">
         <path
@@ -51,7 +62,7 @@ const socials = [
       </svg>
     ),
   },
-] as const
+]
 
 type Props = {
   rights: string
@@ -64,16 +75,26 @@ export function Footer({ rights }: Props) {
       <ul className="social-row" aria-label="Соцсети">
         {socials.map((item) => (
           <li key={item.id}>
-            <a
-              className="social-link"
-              href={item.href}
-              aria-label={item.label}
-              {...(item.href.startsWith('http')
-                ? { target: '_blank', rel: 'noreferrer' }
-                : {})}
-            >
-              {item.icon}
-            </a>
+            {item.href ? (
+              <a
+                className="social-link"
+                href={item.href}
+                aria-label={item.label}
+                {...(item.href.startsWith('http')
+                  ? { target: '_blank', rel: 'noreferrer' }
+                  : {})}
+              >
+                {item.icon}
+              </a>
+            ) : (
+              <span
+                className="social-link social-link--static"
+                aria-label={item.label}
+                title={item.label}
+              >
+                {item.icon}
+              </span>
+            )}
           </li>
         ))}
       </ul>

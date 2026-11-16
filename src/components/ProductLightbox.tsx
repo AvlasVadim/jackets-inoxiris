@@ -3,6 +3,7 @@ import {
   getModelColorSwatches,
   resolveProductColorImage,
 } from '../data/productColors'
+import { lockBodyScroll } from '../lib/scrollLock'
 
 type Props = {
   open: boolean
@@ -38,6 +39,7 @@ const idleZoom: ZoomState = {
   bgPosY: 0,
 }
 
+/** Visible letterboxed photo rect for object-fit: contain inside the fixed stage. */
 function getContainedPhotoRect(img: HTMLImageElement) {
   const box = img.getBoundingClientRect()
   const nw = img.naturalWidth
@@ -68,7 +70,12 @@ export function ProductLightbox({
   const imageRef = useRef<HTMLImageElement>(null)
   const [color, setColor] = useState('Любой')
   const [size, setSize] = useState('')
+  const [sizeErrorShown, setSizeErrorShown] = useState(false)
   const [zoom, setZoom] = useState<ZoomState>(idleZoom)
+  /** Visible photo (kept until the next color src finishes loading). */
+  const [shownSrc, setShownSrc] = useState(src)
+  /** Incoming color photo; rendered off-stage until onLoad. */
+  const [pendingSrc, setPendingSrc] = useState<string | null>(null)
 
   const colorSwatches = useMemo(
     () => getModelColorSwatches(modelId),
@@ -85,11 +92,10 @@ export function ProductLightbox({
     function onKey(event: KeyboardEvent) {
       if (event.key === 'Escape') onClose()
     }
-    const prev = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
+    const unlock = lockBodyScroll()
     window.addEventListener('keydown', onKey)
     return () => {
-      document.body.style.overflow = prev
+      unlock()
       window.removeEventListener('keydown', onKey)
     }
   }, [open, onClose])
@@ -98,14 +104,32 @@ export function ProductLightbox({
     if (!open) return
     setColor('Любой')
     setSize('')
+    setSizeErrorShown(false)
     setZoom(idleZoom)
+    setShownSrc(src)
+    setPendingSrc(null)
   }, [open, src, modelId])
+
+  // Keep previous photo visible until the next color src is ready (double-buffer).
+  useEffect(() => {
+    if (!open) return
+    if (displaySrc === shownSrc) {
+      setPendingSrc(null)
+      return
+    }
+    setPendingSrc(displaySrc)
+    setZoom(idleZoom)
+
+    // Warm HTTP cache even before the off-stage <img> mounts.
+    const preload = new Image()
+    preload.src = displaySrc
+  }, [open, displaySrc, shownSrc])
 
   if (!open) return null
 
   function onMove(event: MouseEvent<HTMLDivElement>) {
     const img = imageRef.current
-    if (!img) return
+    if (!img || !img.complete || !img.naturalWidth) return
 
     const photo = getContainedPhotoRect(img)
     const half = LENS / 2
@@ -129,13 +153,21 @@ export function ProductLightbox({
   }
 
   function handleOrder() {
-    if (!size.trim()) return
+    if (!size.trim()) {
+      setSizeErrorShown(true)
+      document.getElementById('lightbox-size')?.focus()
+      return
+    }
+    setSizeErrorShown(false)
     onOrder({
       model: modelName,
       color: color.trim() || 'Любой',
       size: size.trim(),
     })
   }
+
+  const sizeError =
+    sizeErrorShown && !size.trim() ? 'Укажите рост / размер' : ''
 
   return (
     <div
@@ -171,11 +203,24 @@ export function ProductLightbox({
           >
             <img
               ref={imageRef}
-              key={displaySrc}
-              src={displaySrc}
+              src={shownSrc}
               alt={alt}
-              className="lightbox-image"
+              className="lightbox-image is-shown"
+              draggable={false}
             />
+            {pendingSrc ? (
+              <img
+                src={pendingSrc}
+                alt=""
+                className="lightbox-image is-pending"
+                aria-hidden="true"
+                draggable={false}
+                onLoad={() => {
+                  setShownSrc(pendingSrc)
+                  setPendingSrc(null)
+                }}
+              />
+            ) : null}
             {zoom.active ? null : (
               <span className="lightbox-stage-hint">Наведите для увеличения</span>
             )}
@@ -229,22 +274,33 @@ export function ProductLightbox({
                 {color}
               </p>
             </div>
-            <div className="field">
+            <div className={`field${sizeError ? ' is-invalid' : ''}`}>
               <label htmlFor="lightbox-size">Рост / размер</label>
               <input
                 id="lightbox-size"
                 inputMode="numeric"
                 placeholder="например, 104"
                 value={size}
-                onChange={(e) => setSize(e.target.value.replace(/[^\d]/g, ''))}
+                onChange={(e) => {
+                  const next = e.target.value.replace(/[^\d]/g, '')
+                  setSize(next)
+                  if (sizeErrorShown && next.trim()) setSizeErrorShown(false)
+                }}
                 required
+                aria-invalid={Boolean(sizeError)}
+                aria-describedby={sizeError ? 'lightbox-size-error' : undefined}
+                className={sizeError ? 'is-invalid' : undefined}
               />
+              {sizeError ? (
+                <p id="lightbox-size-error" className="field-error" role="alert">
+                  {sizeError}
+                </p>
+              ) : null}
             </div>
             <button
               type="button"
               className="btn btn-accent lightbox-order-btn"
               onClick={handleOrder}
-              disabled={!size.trim()}
             >
               Заказать
             </button>
@@ -259,7 +315,7 @@ export function ProductLightbox({
             height: LENS,
             left: zoom.lensLeft,
             top: zoom.lensTop,
-            backgroundImage: `url(${displaySrc})`,
+            backgroundImage: `url(${shownSrc})`,
             backgroundSize: `${zoom.bgSizeW}px ${zoom.bgSizeH}px`,
             backgroundPosition: `${zoom.bgPosX}px ${zoom.bgPosY}px`,
           }}

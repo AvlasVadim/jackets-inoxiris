@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { toE164 } from '../src/data/phoneCountries'
 import { products } from '../src/data/products'
 import { colorLabelToSlug } from '../src/data/productColors'
 import { validateCity } from '../src/lib/validateCity'
@@ -125,6 +126,12 @@ export function formatNow(): string {
   })
 }
 
+/** Plain +digits for Telegram so the number is tappable to call. */
+export function formatPhoneForTelegram(phone: string | undefined): string {
+  const e164 = toE164(String(phone ?? ''))
+  return e164 === '+' ? '' : e164
+}
+
 export function buildDigest(body: OrderBody): string {
   const row = (emoji: string, label: string, value: string) =>
     `${emoji} <b>${label}:</b> ${escapeHtml(value || '—')}`
@@ -141,7 +148,7 @@ export function buildDigest(body: OrderBody): string {
     '👤 <b>Клиент</b>',
     '────────',
     row('✍️', 'Имя', body.name ?? ''),
-    row('📞', 'Телефон', body.phone ?? ''),
+    row('📞', 'Телефон', formatPhoneForTelegram(body.phone)),
     row('🏙', 'Город', body.city ?? ''),
     row('💬', 'Комментарий', body.comment ?? ''),
     row('🕒', 'Время', formatNow()),
